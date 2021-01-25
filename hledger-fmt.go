@@ -79,6 +79,11 @@ func readPreamble(ledgerFile string) ([]string, error) {
 }
 
 func run(ledgerFile string) error {
+	// Return an error if ledgerFile doesn't exist
+	if _, err := os.Stat(ledgerFile); err != nil {
+		return err
+	}
+
 	// Create tempfile - write the formatted hledger journal here
 	tmpfile, err := ioutil.TempFile(
 		filepath.Dir(ledgerFile),
@@ -121,6 +126,10 @@ func run(ledgerFile string) error {
 
 func main() {
 	ledgerFile := os.Getenv("LEDGER_FILE")
+	if ledgerFile == "" {
+		ledgerFile = filepath.Join(os.Getenv("HOME"), ".hledger.journal")
+	}
+
 	flag.StringVar(&ledgerFile, "f", ledgerFile, "hledger journal file")
 	flag.Parse()
 
