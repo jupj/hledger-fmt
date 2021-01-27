@@ -89,7 +89,6 @@ func formatTransactions(w io.Writer, preamble, transactions []string) error {
 		return err
 	}
 	cmd.Stderr = os.Stderr
-	cmd.Stdout = w
 
 	go func() {
 		defer stdin.Close()
@@ -125,7 +124,15 @@ func formatTransactions(w io.Writer, preamble, transactions []string) error {
 		}
 	}()
 
-	if err := cmd.Run(); err != nil {
+	journal, err := cmd.Output()
+	if err != nil {
+		return err
+	}
+
+	// Remove trailing empty lines
+	journal = regexp.MustCompile(`\n+$`).ReplaceAll(journal, []byte("\n"))
+
+	if _, err := w.Write(journal); err != nil {
 		return err
 	}
 

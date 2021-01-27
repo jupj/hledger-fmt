@@ -79,7 +79,6 @@ D 10,00 €
 	const expected = `2021-01-03 Prisma
     expense        135,43 €
     income        -135,43 €
-
 `
 	if got != expected {
 		t.Errorf("Got journal:\n%q\nExpected:\n%q\n", got, expected)
