@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -17,21 +18,20 @@ import (
 // anything below this line will be replaced by the output of `hledger print`
 const sep = "; :::Transactions:::"
 
-// readPreamble returns the preamble for ledgerFile
+var (
+	reTransaction = regexp.MustCompile(`^\d`)
+	rePosting     = regexp.MustCompile(`^\s+\S`)
+	reInclude     = regexp.MustCompile(`^include `)
+)
+
+// parseJournal splits the journal read from r into preamble and transactions
 // return an error if
 // - ledgerFile has no separator line
 // - ledgerFile has more than one separator line
 // - lines below the separator line are anything else than transactions
-func readPreamble(ledgerFile string) ([]string, error) {
-	f, err := os.Open(ledgerFile)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
+func parseJournal(r io.Reader) (preamble []string, transactions []string, err error) {
 	// Read lines up to sep
-	scan := bufio.NewScanner(f)
-	var preamble []string
+	scan := bufio.NewScanner(r)
 	foundSep := false
 	lineNr := 0
 	for scan.Scan() {
@@ -44,15 +44,17 @@ func readPreamble(ledgerFile string) ([]string, error) {
 	}
 
 	if !foundSep {
-		return nil, errors.New("ledger file contains no transaction separator")
+		return nil, nil, errors.New("ledger file contains no transaction separator")
 	}
 
-	// Check that anything after this should be a valid transaction
+	// Check that anything after this is only valid transactions
 	for scan.Scan() {
 		lineNr++
 		if scan.Text() == sep {
-			return nil, errors.New("ledger file contains multiple transaction separators")
+			return nil, nil, errors.New("ledger file contains multiple transaction separators")
 		}
+
+		transactions = append(transactions, scan.Text())
 
 		// Allow empty lines
 		if strings.TrimSpace(scan.Text()) == "" {
@@ -60,27 +62,86 @@ func readPreamble(ledgerFile string) ([]string, error) {
 		}
 
 		// Date - starts transaction
-		if regexp.MustCompile(`^20\d\d-\d\d-\d\d `).Match(scan.Bytes()) {
+		if reTransaction.Match(scan.Bytes()) {
 			continue
 		}
 
 		// posting lines - must be indented
-		if regexp.MustCompile(`^\s+\S`).Match(scan.Bytes()) {
+		if rePosting.Match(scan.Bytes()) {
 			continue
 		}
 
-		return nil, fmt.Errorf("ledger file contains unexpected line %d in transactions:\n%s", lineNr, scan.Text())
+		return nil, nil, fmt.Errorf("ledger file contains unexpected line %d in transactions:\n%s", lineNr, scan.Text())
 	}
 
 	if err := scan.Err(); err != nil {
-		return nil, scan.Err()
+		return nil, nil, scan.Err()
 	}
-	return preamble, nil
+	return preamble, transactions, nil
+}
+
+func formatTransactions(w io.Writer, preamble, transactions []string) error {
+	// run `hledger print` to format the transactions in ledgerFile
+	// and write them to tmpfile
+	cmd := exec.Command("hledger", "-f", "-", "print")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+	cmd.Stderr = os.Stderr
+	cmd.Stdout = w
+
+	go func() {
+		defer stdin.Close()
+		// rewrite preamble to comment out include statements and transactions
+		inTransaction := false
+		const comment = "; "
+		for _, line := range preamble {
+			if reInclude.MatchString(line) {
+				fmt.Fprintln(stdin, comment+line)
+				continue
+			}
+
+			if reTransaction.MatchString(line) {
+				inTransaction = true
+				fmt.Fprintln(stdin, comment+line)
+				continue
+			}
+
+			if inTransaction && rePosting.MatchString(line) {
+				fmt.Fprintln(stdin, comment+line)
+				continue
+			}
+
+			if strings.TrimSpace(line) == "" {
+				inTransaction = false
+			}
+
+			fmt.Fprintln(stdin, line)
+		}
+		fmt.Fprintln(stdin, sep)
+		for _, line := range transactions {
+			fmt.Fprintln(stdin, line)
+		}
+	}()
+
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func run(ledgerFile string) error {
-	// Return an error if ledgerFile doesn't exist
-	if _, err := os.Stat(ledgerFile); err != nil {
+	// read the journal - the lines to keep unchanged
+	journal, err := os.Open(ledgerFile)
+	if err != nil {
+		return err
+	}
+
+	preamble, transactions, err := parseJournal(journal)
+	journal.Close()
+	if err != nil {
 		return err
 	}
 
@@ -92,23 +153,13 @@ func run(ledgerFile string) error {
 		return err
 	}
 
-	// read the preable - the lines to keep unchanged
-	preamble, err := readPreamble(ledgerFile)
-	if err != nil {
-		return err
-	}
-
-	// write preamble to tmpfile
+	// write preamble as is to tmpfile
 	fmt.Fprintln(tmpfile, strings.Join(preamble, "\n"))
 	fmt.Fprintln(tmpfile, sep)
 	fmt.Fprintln(tmpfile)
 
-	// run `hledger print` to format the transactions in ledgerFile
-	// and write them to tmpfile
-	cmd := exec.Command("hledger", "-f", ledgerFile, "print")
-	cmd.Stderr = os.Stderr
-	cmd.Stdout = tmpfile
-	if err := cmd.Run(); err != nil {
+	if err := formatTransactions(tmpfile, preamble, transactions); err != nil {
+		tmpfile.Close()
 		return err
 	}
 
