@@ -80,9 +80,20 @@ func parseJournal(r io.Reader) (preamble []string, transactions []string, err er
 	return preamble, transactions, nil
 }
 
-func formatTransactions(w io.Writer, preamble, transactions []string) error {
+// formatTransactions reads a hledger journal from r, formats all transactions
+// under the separator line, and writes the formatted journal to w
+func formatTransactions(w io.Writer, r io.Reader) error {
+	preamble, transactions, err := parseJournal(r)
+	if err != nil {
+		return err
+	}
+
+	// Write preamble "as is" to w
+	fmt.Fprintln(w, strings.Join(preamble, "\n"))
+	fmt.Fprintln(w, sep)
+	fmt.Fprintln(w)
+
 	// run `hledger print` to format the transactions in ledgerFile
-	// and write them to tmpfile
 	cmd := exec.Command("hledger", "-f", "-", "print")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -96,24 +107,14 @@ func formatTransactions(w io.Writer, preamble, transactions []string) error {
 		inTransaction := false
 		const comment = "; "
 		for _, line := range preamble {
-			if reInclude.MatchString(line) {
-				fmt.Fprintln(stdin, comment+line)
-				continue
-			}
-
-			if reTransaction.MatchString(line) {
-				inTransaction = true
-				fmt.Fprintln(stdin, comment+line)
-				continue
-			}
-
-			if inTransaction && rePosting.MatchString(line) {
-				fmt.Fprintln(stdin, comment+line)
-				continue
-			}
-
-			if strings.TrimSpace(line) == "" {
+			switch {
+			case strings.TrimSpace(line) == "":
 				inTransaction = false
+			case reTransaction.MatchString(line):
+				inTransaction = true
+				fallthrough
+			case reInclude.MatchString(line), inTransaction && rePosting.MatchString(line):
+				fmt.Fprint(stdin, comment)
 			}
 
 			fmt.Fprintln(stdin, line)
@@ -124,14 +125,16 @@ func formatTransactions(w io.Writer, preamble, transactions []string) error {
 		}
 	}()
 
+	// Get formatted transactions
 	journal, err := cmd.Output()
 	if err != nil {
 		return err
 	}
 
-	// Remove trailing empty lines
+	// Remove trailing empty lines from transactions
 	journal = regexp.MustCompile(`\n+$`).ReplaceAll(journal, []byte("\n"))
 
+	// Write transactions to w
 	if _, err := w.Write(journal); err != nil {
 		return err
 	}
@@ -140,19 +143,13 @@ func formatTransactions(w io.Writer, preamble, transactions []string) error {
 }
 
 func run(ledgerFile string) error {
-	// read the journal - the lines to keep unchanged
+	// read the journal file to format
 	journal, err := os.Open(ledgerFile)
 	if err != nil {
 		return err
 	}
 
-	preamble, transactions, err := parseJournal(journal)
-	journal.Close()
-	if err != nil {
-		return err
-	}
-
-	// Create tempfile - write the formatted hledger journal here
+	// Create tempfile - write the formatted journal here
 	tmpfile, err := ioutil.TempFile(
 		filepath.Dir(ledgerFile),
 		filepath.Base(ledgerFile)+".tmp_")
@@ -160,17 +157,19 @@ func run(ledgerFile string) error {
 		return err
 	}
 
-	// write preamble as is to tmpfile
-	fmt.Fprintln(tmpfile, strings.Join(preamble, "\n"))
-	fmt.Fprintln(tmpfile, sep)
-	fmt.Fprintln(tmpfile)
-
-	if err := formatTransactions(tmpfile, preamble, transactions); err != nil {
+	// Format journal to tmpfile
+	if err := formatTransactions(tmpfile, journal); err != nil {
 		tmpfile.Close()
+		journal.Close()
 		return err
 	}
 
+	// Close files, return error if any close fails
 	if err := tmpfile.Close(); err != nil {
+		journal.Close()
+		return err
+	}
+	if err := journal.Close(); err != nil {
 		return err
 	}
 

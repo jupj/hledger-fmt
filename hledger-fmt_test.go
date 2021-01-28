@@ -16,7 +16,7 @@ D 10,00 €
 
 ; :::Transactions:::
 
-2021-01-03 Prisma
+2021-01-03 Groceries
     expense           135,43 €
     income       -135,43
 `))
@@ -39,7 +39,7 @@ D 10,00 €
 	}
 
 	const expectedTransactions = `
-2021-01-03 Prisma
+2021-01-03 Groceries
     expense           135,43 €
     income       -135,43`
 	got = strings.Join(transactions, "\n")
@@ -51,32 +51,36 @@ D 10,00 €
 
 func TestFormat(t *testing.T) {
 
-	preamble, transactions, err := parseJournal(strings.NewReader(`
+	const input = `
 D 10,00 €
 
 2021-01-01 Pre-transaction
-    expense          7,90
-    income                -7,90
+	expense          7,90
+	income                -7,90
 
 ; :::Transactions:::
 
-2021-01-03 Prisma
-    expense           135,43 €
-    income       -135,43
-`))
-
-	if err != nil {
-		t.Fatal(err)
-	}
+2021-01-03 Groceries
+	expense           135,43 €
+	income       -135,43
+`
 
 	var buf strings.Builder
-	err = formatTransactions(&buf, preamble, transactions)
-	if err != nil {
+	if err := formatTransactions(&buf, strings.NewReader(input)); err != nil {
 		t.Fatal(err)
 	}
 
 	got := buf.String()
-	const expected = `2021-01-03 Prisma
+	const expected = `
+D 10,00 €
+
+2021-01-01 Pre-transaction
+	expense          7,90
+	income                -7,90
+
+; :::Transactions:::
+
+2021-01-03 Groceries
     expense        135,43 €
     income        -135,43 €
 `
