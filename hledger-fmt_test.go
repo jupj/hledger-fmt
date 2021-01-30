@@ -89,3 +89,49 @@ D 10,00 €
 	}
 
 }
+
+func TestAssertions(t *testing.T) {
+	// balance assertions might be inconsistent due to not including transactions from other files.
+	// => hledger-fmt should ignore balance assertions
+	const input = `
+D 10,00 €
+
+2021-01-01 Pre-transaction
+	expense          7,90 = 100,00
+	income                -7,90
+
+include expenses.journal
+
+; :::Transactions:::
+
+2021-01-03 Groceries
+	expense           135,43 € = 1000,00
+	income       -135,43
+`
+
+	var buf strings.Builder
+	if err := formatTransactions(&buf, strings.NewReader(input)); err != nil {
+		t.Fatal(err)
+	}
+
+	got := buf.String()
+	const expected = `
+D 10,00 €
+
+2021-01-01 Pre-transaction
+	expense          7,90 = 100,00
+	income                -7,90
+
+include expenses.journal
+
+; :::Transactions:::
+
+2021-01-03 Groceries
+    expense        135,43 € = 1000,00 €
+    income        -135,43 €
+`
+	if got != expected {
+		t.Errorf("Got journal:\n%q\nExpected:\n%q\n", got, expected)
+	}
+
+}

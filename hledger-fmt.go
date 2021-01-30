@@ -94,7 +94,7 @@ func formatTransactions(w io.Writer, r io.Reader) error {
 	fmt.Fprintln(w)
 
 	// run `hledger print` to format the transactions in ledgerFile
-	cmd := exec.Command("hledger", "-f", "-", "print")
+	cmd := exec.Command("hledger", "-f", "-", "--ignore-assertions", "print")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
