@@ -182,13 +182,16 @@ func run(ledgerFile string) error {
 }
 
 func main() {
-	ledgerFile := os.Getenv("LEDGER_FILE")
-	if ledgerFile == "" {
-		ledgerFile = filepath.Join(os.Getenv("HOME"), ".hledger.journal")
-	}
-
-	flag.StringVar(&ledgerFile, "f", ledgerFile, "hledger journal file")
+	var ledgerFile string
+	flag.StringVar(&ledgerFile, "f", "", "hledger journal file (default $LEDGER_`FILE` or $HOME/.hledger.journal)")
 	flag.Parse()
+
+	if ledgerFile == "" {
+		ledgerFile = os.Getenv("LEDGER_FILE")
+		if ledgerFile == "" {
+			ledgerFile = filepath.Join(os.Getenv("HOME"), ".hledger.journal")
+		}
+	}
 
 	if err := run(ledgerFile); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
