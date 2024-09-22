@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -142,41 +141,50 @@ func formatTransactions(w io.Writer, r io.Reader) error {
 	return nil
 }
 
+// run executes the program, i.e. formats the given ledgerFile
 func run(ledgerFile string) error {
-	// read the journal file to format
-	journal, err := os.Open(ledgerFile)
+	// Open the journal file to be rewritten
+	journal, err := os.OpenFile(ledgerFile, os.O_RDWR, 0600)
 	if err != nil {
 		return err
 	}
+	defer journal.Close()
 
-	// Create tempfile - write the formatted journal here
-	tmpfile, err := ioutil.TempFile(
+	// Create backup of journal file
+	backupFile, err := os.CreateTemp(
 		filepath.Dir(ledgerFile),
-		filepath.Base(ledgerFile)+".tmp_")
+		filepath.Base(ledgerFile)+".bak_")
 	if err != nil {
 		return err
 	}
-
-	// Format journal to tmpfile
-	if err := formatTransactions(tmpfile, journal); err != nil {
-		tmpfile.Close()
-		journal.Close()
+	defer backupFile.Close()
+	if _, err := io.Copy(backupFile, journal); err != nil {
+		return err
+	}
+	if err := backupFile.Sync(); err != nil {
 		return err
 	}
 
-	// Close files, return error if any close fails
-	if err := tmpfile.Close(); err != nil {
-		journal.Close()
+	// Prepare files for reading (backupFile) and writing (journal)
+	if _, err := backupFile.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
-	if err := journal.Close(); err != nil {
+	if _, err := journal.Seek(0, io.SeekStart); err != nil {
 		return err
+	}
+	if err := journal.Truncate(0); err != nil {
+		return fmt.Errorf("write error: %w (recover journal from %s)", err, backupFile.Name())
 	}
 
-	// Replace ledgerFile with the newly formatted tmpfile
-	if err := os.Rename(tmpfile.Name(), ledgerFile); err != nil {
-		return err
+	// Format journal - read from backupFile and rewrite journal
+	if err := formatTransactions(journal, backupFile); err != nil {
+		return fmt.Errorf("write error: %w (recover journal from %s)", err, backupFile.Name())
 	}
+	if err := journal.Sync(); err != nil {
+		return fmt.Errorf("write error: %w (recover journal from %s)", err, backupFile.Name())
+	}
+
+	os.Remove(backupFile.Name())
 
 	return nil
 }

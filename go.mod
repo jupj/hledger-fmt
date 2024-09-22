@@ -1,3 +1,3 @@
 module github.com/jupj/hledger-fmt
 
-go 1.15
+go 1.22
